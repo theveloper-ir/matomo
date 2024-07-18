@@ -232,6 +232,16 @@ class CronArchive
     private $supportsAsync;
 
     /**
+     * @var null|int
+     */
+    private $signal = null;
+
+    /**
+     * @var CliMulti|null
+     */
+    private $cliMultiHandler = null;
+
+    /**
      * Constructor.
      *
      * @param LoggerInterface|null $logger
@@ -281,6 +291,21 @@ class CronArchive
                 $this->logger->info("Archiving stopped by stop archiver exception" . $e->getMessage());
             }
         });
+    }
+
+    public function handleSignal(int $signal): void
+    {
+        $this->logger->info('Received system signal: ' . $signal);
+
+        $this->signal = $signal;
+
+        // kill all running archiving processes in case of \SIGTERM
+        if (!empty($this->cliMultiHandler) && $signal === \SIGTERM) {
+            $this->logger->info('Trying to kill running cli processes...');
+            $this->cliMultiHandler->kill();
+        }
+
+        // Note: finishing the archiving process will be handled in `run()`
     }
 
     public function init()
@@ -387,6 +412,11 @@ class CronArchive
         $queueConsumer->setMaxSitesToProcess($this->maxSitesToProcess);
 
         while (true) {
+            if ($this->signal > 0) {
+                $this->logger->info("Archiving will stop now because signal to abort received");
+                return;
+            }
+
             if ($this->isMaintenanceModeEnabled()) {
                 $this->logger->info("Archiving will stop now because maintenance mode is enabled");
                 return;
@@ -499,18 +529,28 @@ class CronArchive
             return 0; // all URLs had no visits and were using the tracker
         }
 
-        $cliMulti = $this->makeCliMulti();
-        $cliMulti->timeRequests();
+        $this->cliMultiHandler = $this->makeCliMulti();
+        $this->cliMultiHandler->timeRequests();
 
-        $responses = $cliMulti->request($urls);
+        $responses = $this->cliMultiHandler->request($urls);
 
         $this->disconnectDb();
 
-        $timers = $cliMulti->getTimers();
+        $timers = $this->cliMultiHandler->getTimers();
         $successCount = 0;
 
         foreach ($urls as $index => $url) {
             $content = array_key_exists($index, $responses) ? $responses[$index] : null;
+
+            if ($this->signal && empty($content)) {
+                // processes killed by system
+                $idinvalidation = $archivesBeingQueried[$index]['idinvalidation'];
+                $this->model->releaseInProgressInvalidation($idinvalidation);
+                $this->logger->info('Archiving process killed, reset invalidation with id ' . $idinvalidation);
+
+                continue;
+            }
+
             $checkInvalid = $this->checkResponse($content, $url);
 
             $stats = json_decode($content, $assoc = true);
@@ -528,7 +568,6 @@ class CronArchive
 
             $visitsForPeriod = $this->getVisitsFromApiResponse($stats);
 
-
             $this->logArchiveJobFinished(
                 $url,
                 $timers[$index],
@@ -537,7 +576,6 @@ class CronArchive
                 $archivesBeingQueried[$index]['report'],
                 !$checkInvalid
             );
-
 
             $this->deleteInvalidatedArchives($archivesBeingQueried[$index]);
 
@@ -651,6 +689,10 @@ class CronArchive
 
     public function runScheduledTasks()
     {
+        if ($this->signal > 0) {
+            return; // Skip running scheduled task if abort signal has been received
+        }
+
         $this->logSection("SCHEDULED TASKS");
 
         if ($this->disableScheduledTasks) {

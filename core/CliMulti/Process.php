@@ -158,6 +158,22 @@ class Process
         return $size < 500;
     }
 
+    /**
+     * Tries to kill the running process, if not possible the process will finish normally
+     *
+     * @return void
+     */
+    public function killProcess()
+    {
+        $pid = trim($this->getPidFileContent());
+
+        if ($pid && function_exists('posix_kill')) {
+            echo "killing $pid\n";
+            posix_kill((int) $pid, \SIGKILL);
+            $this->finishProcess();
+        }
+    }
+
     public function finishProcess()
     {
         $this->finished = true;

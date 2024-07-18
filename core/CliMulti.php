@@ -154,6 +154,19 @@ class CliMulti
         $this->runAsSuperUser = $runAsSuperUser;
     }
 
+    /**
+     * Kills all running processes
+     *
+     * @return void
+     */
+    public function kill(): void
+    {
+        foreach ($this->processes as $process) {
+            $process->killProcess();
+        }
+        $this->cleanup();
+    }
+
     private function start($piwikUrls)
     {
         $numUrls = count($piwikUrls);
