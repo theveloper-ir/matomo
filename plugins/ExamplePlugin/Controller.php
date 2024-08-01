@@ -15,7 +15,7 @@ namespace Piwik\Plugins\ExamplePlugin;
  * http://developer.piwik.org/api-reference/Piwik/Plugin/Controller and
  * http://developer.piwik.org/api-reference/Piwik/View
  */
-class Controller extends \Piwik\Plugin\Controller
+class Controller extends \Piwik\Plugin\ControllerAdmin
 {
     public function index()
     {
